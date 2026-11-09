@@ -1,0 +1,669 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Stretchtext, stretched</title>
+<style>
+:root {
+  color-scheme: light dark;
+  --page:#f3efe6; --paper:#fffcf6; --ink:#24211d; --quiet:#6f685d; --line:#e1d9ca;
+  --accent:#b0502b; --on-accent:#fffaf3; --wash:rgba(176,80,43,.08); --wash-2:rgba(176,80,43,.17);
+  --insert:#3d7a57; --delete:#b0502b; --replace:#6658a6; --move:#a27616;
+  --serif:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;
+  --sans:system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:ui-monospace,"SF Mono",Menlo,monospace;
+}
+@media (prefers-color-scheme:dark) { :root {
+  --page:#181715; --paper:#211f1c; --ink:#eee8dd; --quiet:#a59d90; --line:#38332d;
+  --accent:#e98d64; --on-accent:#1b1916; --wash:rgba(233,141,100,.10); --wash-2:rgba(233,141,100,.22);
+  --insert:#80c49c; --delete:#e98d64; --replace:#a99cf0; --move:#dcb35a;
+} }
+* { box-sizing:border-box; }
+body { margin:0; background:var(--page); color:var(--ink); font:1rem/1.55 var(--sans); }
+main { max-width:44rem; margin:0 auto; padding:56px 24px 72px; }
+.kicker { color:var(--quiet); font-size:.72rem; letter-spacing:.14em; text-transform:uppercase; }
+h1 { font:400 clamp(2.1rem,6vw,3rem)/1.1 var(--serif); letter-spacing:-.01em; margin:10px 0 14px; }
+.lede { color:var(--quiet); max-width:36rem; margin:0 0 32px; }
+
+/* The essay: prose first, its apparatus below. */
+.draft { background:var(--paper); border:1px solid var(--line); border-radius:14px; padding:22px 32px 20px; box-shadow:0 18px 40px -28px rgba(60,35,10,.45); }
+.essay-note { margin:0; padding-bottom:12px; border-bottom:1px solid var(--line); font-size:.78rem; color:var(--quiet); }
+.essay-source { font-size:.78rem; color:var(--quiet); margin:18px 0 0; }
+.essay-source a { color:inherit; text-underline-offset:.15em; }
+.writing { font:1.3rem/1.75 var(--serif); }
+.writing p { margin:.9em 0; }
+.hint { margin:6px 0 0; padding-top:12px; border-top:1px solid var(--line); color:var(--quiet); font-size:.82rem; }
+kbd { font:.78em var(--mono); border:1px solid var(--line); border-bottom-width:2px; border-radius:4px; padding:0 .35em; }
+
+/* A stretchable phrase. Dotted: possibilities you have not explored. Solid: you have. */
+[data-reading][hidden], .diff-view[hidden] { display:none; }
+.js [data-stretch] {
+  --deco:underline dotted 2px color-mix(in srgb, var(--accent) 70%, transparent);
+  text-decoration:var(--deco); text-underline-offset:.24em;
+  border-radius:4px; cursor:ns-resize; touch-action:none; user-select:none; -webkit-user-select:none;
+  box-decoration-break:clone; -webkit-box-decoration-break:clone; transition:background-color .15s;
+}
+.js [data-stretch].touched { --deco:underline solid 1.5px var(--accent); }
+.js [data-stretch]:hover, .js [data-stretch].active { background:var(--wash); }
+.js [data-stretch].held { background:var(--wash-2); }
+.js [data-stretch]:focus { outline:none; }
+.js [data-stretch]:focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
+.token { display:inline-block; white-space:pre; vertical-align:baseline; }
+.token .ink { display:inline-block; transform-origin:left center; text-decoration:var(--deco); text-underline-offset:.24em; }
+body.dragging, body.dragging * { cursor:ns-resize !important; }
+
+/* Grip: one bar per reading, filled down to the current one. */
+.grip { display:inline-flex; flex-direction:column; gap:2px; vertical-align:middle; margin:0 .06em 0 .2em; }
+.grip i { display:block; width:.4em; height:2px; border-radius:1px; background:var(--accent); opacity:.25; transition:opacity .12s; }
+.grip i.on { opacity:1; }
+body:not(.explored) .grip i:nth-child(2) { animation:nudge 2.2s ease-in-out .8s 3; }
+@keyframes nudge { 40% { opacity:1; transform:translateY(1px); } }
+
+/* Diagnostic colouring of inferred edits. */
+.mark-edits .token[data-role="stretch"] { background:var(--wash-2); }
+.mark-edits [data-change="insert"] { color:var(--insert); }
+.mark-edits [data-change="delete"] { color:var(--delete); }
+.mark-edits [data-change="replace"] { color:var(--replace); }
+.mark-edits [data-change="move"] { color:var(--move); }
+
+/* The ledger: every phrase, where it sits, and whether you have touched it. */
+.panel { margin-top:28px; }
+.panel-head { display:flex; justify-content:space-between; align-items:baseline; gap:12px; margin-bottom:8px; }
+.ledger { list-style:none; margin:0; padding:0; border-top:1px solid var(--line); }
+.row { display:grid; grid-template-columns:8.5rem 1fr 7.5rem; align-items:center; gap:4px 14px; padding:10px 8px; border-bottom:1px solid var(--line); border-radius:8px; }
+.row.active { background:var(--wash); border-bottom-color:transparent; }
+.row-name { justify-self:start; font-weight:600; border:0; background:none; padding:4px 0; color:var(--ink); cursor:pointer; text-align:left; }
+.stops { --n:3; position:relative; display:grid; grid-template-columns:repeat(var(--n),1fr); padding-bottom:10px; }
+.stops::before { content:""; position:absolute; left:calc(50% / var(--n)); right:calc(50% / var(--n)); bottom:4px; height:2px; background:var(--line); border-radius:2px; }
+.stop { position:relative; border:0; background:none; color:var(--quiet); font-size:.84rem; padding:4px 2px; border-radius:6px; cursor:pointer; line-height:1.25; }
+.stop:hover { color:var(--ink); }
+.stop[aria-pressed="true"] { color:var(--ink); font-weight:600; }
+.stop.kept::after { content:""; position:absolute; left:50%; top:1px; width:4px; height:4px; margin-left:-2px; border-radius:50%; background:var(--accent); }
+.thumb { position:absolute; bottom:0; width:10px; height:10px; margin-left:-5px; border-radius:50%; background:var(--paper); border:2px solid var(--quiet); pointer-events:none; }
+.row.touched .thumb { background:var(--accent); border-color:var(--accent); }
+.status { justify-self:end; font-size:.74rem; letter-spacing:.06em; text-transform:uppercase; color:var(--quiet); }
+.status[data-tone="explored"], .status[data-tone="changed"] { color:var(--accent); }
+.status[data-tone="kept"] { color:var(--on-accent); background:var(--accent); padding:1px 7px; border-radius:99px; }
+.row-notes { grid-column:2 / -1; margin:0; font-size:.84rem; color:var(--quiet); }
+.row-notes:empty { display:none; }
+.row-notes q { color:var(--ink); }
+#position { color:var(--quiet); font-size:.84rem; min-height:1.5em; margin:10px 8px 0; }
+
+.actions { display:flex; flex-wrap:wrap; gap:10px; margin-top:18px; align-items:center; }
+button { font:inherit; color:inherit; }
+.btn { border:1px solid var(--line); background:var(--paper); border-radius:8px; padding:9px 14px; cursor:pointer; }
+.btn:hover:not(:disabled) { border-color:var(--quiet); }
+.btn.primary { background:var(--accent); color:var(--on-accent); border-color:var(--accent); font-weight:600; }
+.btn:disabled { opacity:.45; cursor:default; }
+.btn:focus-visible, .stop:focus-visible, .row-name:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+.spacer-flex { flex:1; }
+#result { min-height:1.5em; margin:12px 0 0; font-size:.9rem; }
+.note-form { margin-top:14px; }
+.note-form label { font-size:.84rem; color:var(--quiet); }
+textarea { display:block; width:100%; min-height:72px; margin:6px 0 10px; padding:10px; font:inherit; color:var(--ink); background:var(--paper); border:1px solid var(--line); border-radius:8px; }
+
+details { margin-top:14px; border-top:1px solid var(--line); padding-top:12px; font-size:.9rem; color:var(--quiet); }
+details:first-of-type { margin-top:40px; }
+summary { cursor:pointer; color:var(--ink); }
+details p { max-width:38rem; }
+.legend { display:flex; flex-wrap:wrap; gap:6px 16px; padding:0; list-style:none; }
+.swatch { display:inline-block; width:.8em; height:.8em; border-radius:2px; margin-right:6px; vertical-align:-.05em; background:var(--line); }
+.swatch[data-kind="insert"] { background:var(--insert); } .swatch[data-kind="delete"] { background:var(--delete); }
+.swatch[data-kind="replace"] { background:var(--replace); } .swatch[data-kind="move"] { background:var(--move); }
+.swatch[data-kind="stretch"] { background:var(--wash-2); outline:1px solid var(--accent); outline-offset:-1px; }
+#diff { list-style:none; padding:0; color:var(--ink); }
+#diff li { margin:4px 0; }
+pre { font:.76rem/1.5 var(--mono); white-space:pre-wrap; overflow-wrap:anywhere; background:var(--paper); border:1px solid var(--line); border-radius:8px; padding:12px; max-height:260px; overflow:auto; color:var(--ink); }
+.footer { margin-top:40px; color:var(--quiet); font-size:.82rem; }
+
+@media (max-width:560px) {
+  main { padding:32px 16px 56px; }
+  .draft { padding:16px 18px; border-radius:12px; }
+  .writing { font-size:1.16rem; }
+  .row { grid-template-columns:1fr auto; }
+  .stops { grid-column:1 / -1; grid-row:2; }
+  .row-notes { grid-column:1 / -1; }
+}
+@media (prefers-reduced-motion:reduce) { body:not(.explored) .grip i:nth-child(2) { animation:none; } }
+</style>
+</head>
+<body>
+<main>
+  <div class="kicker">Stretchtext · experiment 10</div>
+  <h1>Stretchtext, stretched.</h1>
+  <p class="lede">Ten passages, thirty readings. Pull the underlined prose to try insertions, rearrangements, compressions, and elaborations. The essay explains the transformations it performs.</p>
+
+  <article class="draft">
+    <p class="essay-note">On writing that makes room for its reader</p>
+    <!-- Authoring surface. Each data-stretch span holds two or more complete
+         data-reading alternatives, first one visible. The engine discovers
+         phrases with no JavaScript edits. IDs unique, no nesting, plain text,
+         and every combination of readings must read coherently. -->
+    <div class="writing" id="writing">
+      <p>Ted Nelson proposed treating detail as a reader-controlled dimension of prose. <span data-stretch="context" data-label="Continuity"><span data-reading="Compact">Stretchtext changes resolution without changing location</span><span data-reading="In-place" hidden>Stretchtext changes the resolution of a passage without sending its reader to another location</span><span data-reading="Context" hidden>Stretchtext changes the resolution of a passage without sending its reader to another location, preserving the surrounding argument while the reader asks for more inside it</span></span>. <span data-stretch="scale" data-label="An insertion"><span data-reading="Skeleton">A passage can be a sentence or an argument</span><span data-reading="Inserted" hidden>A passage can be a sentence, a worked example, or an argument</span><span data-reading="Elaborated" hidden>A passage can be a sentence, a worked example, or an argument with qualifications and counterexamples that its first formulation only implied</span></span>. The unit is not the page: it is whatever thought the reader wants to open.</p>
+      <p>Here, <span data-stretch="gesture" data-label="A rearrangement"><span data-reading="Reader first">the reader chooses depth by pulling</span><span data-reading="Gesture first" hidden>by pulling, the reader chooses depth</span><span data-reading="Reversible" hidden>by pulling and reversing direction, the reader chooses depth before committing to a reading</span></span>. <span data-stretch="coherence" data-label="The midpoint"><span data-reading="Contrast">The gesture is continuous; the language is not</span><span data-reading="Chunks" hidden>The gesture is continuous; the language changes in coherent chunks</span><span data-reading="The pop" hidden>The gesture is continuous; the language changes in coherent chunks, with an earlier reading stretching until it pops to a compressed replacement halfway through the transition</span></span>. What varies continuously is the room occupied by complete accounts, not the completeness of a half-written clause.</p>
+      <p><span data-stretch="correspondence" data-label="The diff"><span data-reading="Outline">The diff distinguishes surviving words from edits</span><span data-reading="Moves" hidden>The diff distinguishes surviving words, relocated phrases, and edits</span><span data-reading="Edit types" hidden>The diff distinguishes surviving words, relocated phrases, substitutions, insertions, and deletions, separating punctuation from the words it accompanies</span></span>. But <span data-stretch="envelope" data-label="Borrowing context"><span data-reading="Distinction">correspondence is not rigidity</span><span data-reading="Restated" hidden>a matched word need not stay rigid</span><span data-reading="Comma case" hidden>a matched word need not stay rigid: when a comma introduces a long elaboration, the preceding phrase can stretch to carry it instead of making one final word bear the whole expansion</span></span>. The diff identifies continuity; the stretch envelope gives that continuity enough material to move.</p>
+      <p><span data-stretch="authoring" data-label="Declarative prose"><span data-reading="Division">The author writes readings; the engine supplies motion</span><span data-reading="Responsibilities" hidden>The author writes complete readings; the engine supplies correspondence, envelopes, and motion</span><span data-reading="Less annotation" hidden>The author writes complete readings; the engine supplies correspondence, envelopes, and motion without requiring manual animation tags for every edited word</span></span>. This saves choreography, not judgement. <span data-stretch="meaning" data-label="A compression"><span data-reading="Caution">A lexical match is not a guarantee that a claim retains its meaning</span><span data-reading="Compressed" hidden>A lexical match does not certify semantic equivalence</span><span data-reading="Negation" hidden>A lexical match does not certify semantic equivalence: adding 'not' can reverse a sentence while leaving nearly every other word untouched</span></span>. A smooth transition is no warrant for a faithful paraphrase.</p>
+      <p><span data-stretch="limits" data-label="The frame"><span data-reading="Distinction">An agent's proposals are not the reader's vocabulary</span><span data-reading="Framing" hidden>An agent's proposals frame a vocabulary without exhausting what the reader may mean</span><span data-reading="Missing options" hidden>An agent's proposals frame a vocabulary without exhausting what the reader may mean, so an absent option must remain something the reader can name rather than silently accept</span></span>. <span data-stretch="consent" data-label="Not consent"><span data-reading="Principle">Exploration is not endorsement</span><span data-reading="Untouched" hidden>Trying a reading is not endorsing it, and leaving a phrase untouched is not choosing its default</span><span data-reading="Notes" hidden>Trying a reading is not endorsing it, and leaving a phrase untouched is not choosing its default; pinned notes remain objections or requests, not silent approvals</span></span>. The reader must be able to pull on the writing and push back against its author.</p>
+    </div>
+    <p class="essay-source">Historical reference: <a href="https://en.wikipedia.org/wiki/Stretchtext" target="_blank" rel="noopener noreferrer">Nelson's stretchtext</a>. The drag interaction and agent-authored readings are this experiment's extension of the idea.</p>
+    <p class="hint" id="hint" hidden>Pull an underlined phrase down or up. Or focus one with <kbd>Tab</kbd> and use <kbd>↓</kbd> <kbd>↑</kbd>; hold <kbd>Shift</kbd> to move a little at a time.</p>
+    <noscript><p class="hint">Without JavaScript you are reading the agent's first proposal for each phrase.</p></noscript>
+  </article>
+
+  <section class="panel" id="panel" hidden aria-labelledby="panel-title">
+    <div class="panel-head"><div class="kicker" id="panel-title">Readings</div><div class="kicker" id="tally"></div></div>
+    <ol class="ledger" id="ledger"></ol>
+    <div id="position"></div>
+    <div class="actions">
+      <button class="btn primary" id="accept" disabled>Keep explored readings</button>
+      <button class="btn" id="undo" disabled>Undo keep</button>
+      <span class="spacer-flex"></span>
+      <button class="btn" id="note-toggle" aria-expanded="false" aria-controls="note-form">Add a note</button>
+    </div>
+    <form class="note-form" id="note-form" hidden>
+      <label for="note" id="note-label">Something the readings cannot say?</label>
+      <textarea id="note" placeholder="I want a reading that…"></textarea>
+      <button class="btn" type="submit">Pin note</button>
+      <button class="btn" type="button" id="note-cancel">Cancel</button>
+    </form>
+    <p id="result" role="status"></p>
+  </section>
+
+  <details id="analysis">
+    <summary>What moves, and why</summary>
+    <p>Two layers, both inferred from the readings alone. <strong>Correspondence:</strong> each pair of neighbouring readings is split at word boundaries, punctuation apart from words, and matched word by word (ignoring case). Unique runs of two or more matched words that changed order are moves. <strong>Motion:</strong> each edit becomes a stretch envelope, which borrows neighbouring matched words until the earlier and later spans are within twice each other's length, or the whole phrase is used. An added clause is carried by the phrase it extends, never by a comma or a blank gap. The envelope's earlier words stretch to fill a growing room, pop at halfway to the later words compressed, then relax. Words outside envelopes keep their shape and glide; moved runs arc over the line. Everything on screen is always one complete reading the agent wrote.</p>
+    <p>Limits: matching is lexical, not semantic; repeated words can match the wrong occurrence; the twofold rule counts space-separated words, not meaning, so it can borrow more or less context than a person would choose.</p>
+    <ul class="legend"><li><span class="swatch" data-kind="stretch"></span>stretch envelope</li><li><span class="swatch" data-kind="insert"></span>inserted</li><li><span class="swatch" data-kind="delete"></span>deleted</li><li><span class="swatch" data-kind="replace"></span>replaced</li><li><span class="swatch" data-kind="move"></span>moved</li></ul>
+    <label><input id="mark" type="checkbox"> Colour envelopes and edits in the essay while pulling</label>
+    <p id="diff-title" style="color:var(--ink);margin-bottom:0"></p>
+    <ul id="diff"></ul>
+  </details>
+  <details>
+    <summary>Authoring a phrase</summary>
+    <p>An agent writes markup only. Readings are ordered; the first is visible without JavaScript.</p>
+    <pre>&lt;span data-stretch="scale" data-label="An insertion"&gt;&lt;span data-reading="Skeleton"&gt;A passage can be a sentence or an argument&lt;/span&gt;&lt;span data-reading="Inserted" hidden&gt;A passage can be a sentence, a worked example, or an argument&lt;/span&gt;&lt;/span&gt;.</pre>
+    <p>Rules: unique IDs, no nesting, plain text inside readings, every combination coherent. Readings stay under 257 words. No model runs during a drag: every state was prepared in advance.</p>
+  </details>
+  <details>
+    <summary>Exploration record</summary>
+    <p>Touched is not kept. Keep records only touched phrases; notes are separate and pinned to a phrase. Everything stays in this page's memory unless you download it.</p>
+    <button class="btn" id="download">Download JSON</button>
+    <pre id="record"></pre>
+  </details>
+  <p class="footer">Exploration is not endorsement. Untouched phrases are never kept.</p>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+document.documentElement.classList.add('js');
+const PX_PER_READING = 72;
+const state = {version:8, accepted:null, notes:[], events:[]};
+let drag = null, previousKeep = null, active = null;
+const ids = new Set();
+const segmenter = typeof Intl==='object' && Intl.Segmenter ? new Intl.Segmenter('en',{granularity:'word'}) : null;
+// An edit's stretch envelope grows until neither side is more than this many
+// times longer than the other (counted in whitespace-delimited clusters).
+const STRETCH_RATIO = 2;
+// Word-boundary segmentation (Unicode UAX 29 via Intl.Segmenter; regex fallback).
+// Tokens are words and punctuation marks, matched by the diff. Clusters are the
+// whitespace-delimited runs of tokens: they render as boxes, so a comma never
+// wraps away from its word and no space is ever added where there was none.
+function tokenize(text) {
+  const parts = segmenter ? Array.from(segmenter.segment(text), s=>s.segment)
+    : text.match(/\s+|[\p{L}\p{M}\p{N}]+(?:['’][\p{L}\p{M}\p{N}]+)*|\S/gu) || [];
+  const tokens=[], clusters=[]; let open=false;
+  for (const part of parts) {
+    if (!part.trim()) { open=false; continue; }
+    if (!open) { clusters.push({text:'',start:tokens.length,end:tokens.length}); open=true; }
+    const cluster=clusters[clusters.length-1], word=/[\p{L}\p{N}]/u.test(part);
+    tokens.push({text:part, word, key:word ? part.toLowerCase() : part, cluster:clusters.length-1});
+    cluster.text+=part; cluster.end++;
+  }
+  return {tokens, clusters};
+}
+// Two layers. Lexical: which words and marks match, move, or change (exact
+// tokens, case-folded; no claim of equivalent meaning). Geometric: which
+// clusters stretch together. Lexical edits only seed envelopes; an envelope
+// borrows neighbouring matched words until both sides are comparably sized,
+// so an elaboration is carried by a phrase, never by a lone comma or a blank.
+function analyze(before, after) {
+  const A=tokenize(before), B=tokenize(after), a=A.tokens, b=B.tokens, n=a.length, m=b.length;
+  if (Math.max(n,m)>256) throw Error('Keep each reading under 257 words and punctuation marks in this prototype.');
+  // Longest common subsequence, quadratic and bounded for teaching clarity.
+  const dp=Array.from({length:n+1},()=>new Uint16Array(m+1));
+  for (let i=n-1;i>=0;i--) for (let j=m-1;j>=0;j--) dp[i][j]=a[i].key===b[j].key ? 1+dp[i+1][j+1] : Math.max(dp[i+1][j],dp[i][j+1]);
+  const ab=Array(n).fill(-1), ba=Array(m).fill(-1), anchors=[], movedA=new Set(), movedB=new Set(), moves=[];
+  let i=0,j=0;
+  while (i<n && j<m) {
+    if (a[i].key===b[j].key) { anchors.push([i,j]); ab[i]=j; ba[j]=i; i++; j++; }
+    else if (dp[i+1][j]>=dp[i][j+1]) i++;
+    else j++;
+  }
+  function occurrences(tokens, links, keys) {
+    let count=0;
+    for (let start=0;start<=tokens.length-keys.length;start++) {
+      if (keys.every((key,k)=>links[start+k]===-1 && tokens[start+k].key===key)) count++;
+    }
+    return count;
+  }
+  // Greedy longest runs of two or more words. Require uniqueness on both
+  // unmatched sides so duplicates are not presented as confident moves.
+  while (true) {
+    let best=null;
+    for (let x=0;x<n;x++) if (ab[x]===-1) for (let y=0;y<m;y++) if (ba[y]===-1) {
+      let length=0;
+      while (x+length<n && y+length<m && ab[x+length]===-1 && ba[y+length]===-1 && a[x+length].key===b[y+length].key) length++;
+      if ((best && length<=best.length) || a.slice(x,x+length).filter(t=>t.word).length<2) continue;
+      const keys=a.slice(x,x+length).map(t=>t.key);
+      if (occurrences(a,ab,keys)===1 && occurrences(b,ba,keys)===1) best={a:x,b:y,length};
+    }
+    if (!best) break;
+    moves.push(best);
+    for (let k=0;k<best.length;k++) {
+      const x=best.a+k,y=best.b+k;
+      ab[x]=y; ba[y]=x; movedA.add(x); movedB.add(y);
+    }
+  }
+  const groups=[], ag=Array(n).fill(-1), bg=Array(m).fill(-1);
+  let ai=0,bi=0;
+  for (const [nextA,nextB] of [...anchors,[n,m]]) {
+    const aa=[],bb=[];
+    for (let x=ai;x<nextA;x++) if (ab[x]===-1) aa.push(x);
+    for (let y=bi;y<nextB;y++) if (ba[y]===-1) bb.push(y);
+    if (aa.length || bb.length) {
+      const g={a:aa,b:bb,aAt:ai,bAt:bi,kind:aa.length ? bb.length ? 'replace':'delete':'insert'};
+      const index=groups.length; aa.forEach(x=>ag[x]=index); bb.forEach(y=>bg[y]=index); groups.push(g);
+    }
+    ai=nextA+1; bi=nextB+1;
+  }
+  // Envelopes: half-open cluster ranges [lo,hi) on each side.
+  const ac=A.clusters, bc=B.clusters;
+  const span=(tokens,list)=>[tokens[list[0]].cluster, tokens[list[list.length-1]].cluster+1];
+  const at=(tokens,clusters,pos)=> {
+    if (pos>0 && pos<tokens.length && tokens[pos-1].cluster===tokens[pos].cluster) return [tokens[pos].cluster,tokens[pos].cluster+1];
+    const c=pos<tokens.length ? tokens[pos].cluster : clusters.length; return [c,c];
+  };
+  // Closure: any matched token inside an envelope pulls its partner's cluster in.
+  function close(e) {
+    for (let changed=true; changed;) {
+      changed=false;
+      const pull=(from,clusters,links,others,to)=> {
+        for (let c=from[0];c<from[1];c++) for (let x=clusters[c].start;x<clusters[c].end;x++) if (links[x]>=0) {
+          const k=others[links[x]].cluster;
+          if (k<to[0]) { to[0]=k; changed=true; }
+          if (k>=to[1]) { to[1]=k+1; changed=true; }
+        }
+      };
+      pull(e.a,ac,ab,b,e.b); pull(e.b,bc,ba,a,e.a);
+    }
+  }
+  const hasWord=(clusters,tokens,[lo,hi])=>hi>lo && tokens.slice(clusters[lo].start,clusters[hi-1].end).some(t=>t.word);
+  const ok=e=> {
+    const x=e.a[1]-e.a[0], y=e.b[1]-e.b[0];
+    return hasWord(ac,a,e.a) && hasWord(bc,b,e.b) && Math.max(x,y)<=STRETCH_RATIO*Math.min(x,y);
+  };
+  // Borrow context: the preceding cluster first (elaborations usually follow
+  // their head), then the following one. Stops at the whole phrase.
+  const grow=e=> {
+    if (e.a[0]>0 || e.b[0]>0) { if (e.a[0]>0) e.a[0]--; if (e.b[0]>0) e.b[0]--; return true; }
+    if (e.a[1]<ac.length || e.b[1]<bc.length) { if (e.a[1]<ac.length) e.a[1]++; if (e.b[1]<bc.length) e.b[1]++; return true; }
+    return false;
+  };
+  const overlaps=(p,q)=>p[0]<q[1] && q[0]<p[1];
+  const envs=groups.map(g=>({a:g.a.length ? span(a,g.a) : at(a,ac,g.aAt), b:g.b.length ? span(b,g.b) : at(b,bc,g.bAt)}));
+  while (true) {
+    for (const e of envs) { close(e); while (!ok(e) && grow(e)) close(e); }
+    const p=envs.findIndex((e,k)=>envs.some((f,l)=>l>k && (overlaps(e.a,f.a) || overlaps(e.b,f.b))));
+    if (p>=0) {
+      const q=envs.findIndex((f,l)=>l>p && (overlaps(envs[p].a,f.a) || overlaps(envs[p].b,f.b)));
+      const e=envs[p], f=envs.splice(q,1)[0];
+      e.a=[Math.min(e.a[0],f.a[0]),Math.max(e.a[1],f.a[1])]; e.b=[Math.min(e.b[0],f.b[0]),Math.max(e.b[1],f.b[1])];
+      continue;
+    }
+    // Every other cluster must glide rigidly onto exactly one partner cluster.
+    // Clusters that split or merge across readings join an envelope instead.
+    const linkA=Array(ac.length).fill(null), linkB=Array(bc.length).fill(null);
+    envs.sort((e,f)=>e.a[0]-f.a[0]).forEach((e,k)=> {
+      for (let c=e.a[0];c<e.a[1];c++) linkA[c]={env:k};
+      for (let c=e.b[0];c<e.b[1];c++) linkB[c]={env:k};
+    });
+    let broken=null;
+    for (let c=0;c<ac.length && !broken;c++) if (!linkA[c]) {
+      const own=a.slice(ac[c].start,ac[c].end), partners=new Set(own.map((t,x)=>ab[ac[c].start+x]>=0 ? b[ab[ac[c].start+x]].cluster : -1));
+      const [k]=partners;
+      if (partners.size===1 && k>=0 && !linkB[k] && b.slice(bc[k].start,bc[k].end).every((t,y)=>ba[bc[k].start+y]>=0 && a[ba[bc[k].start+y]].cluster===c)) {
+        const moved=own.some((t,x)=>movedA.has(ac[c].start+x));
+        linkA[c]={to:k,moved}; linkB[k]={to:c,moved};
+      } else broken={a:[c,c+1], b:k>=0 ? [k,k+1] : [0,bc.length]};
+    }
+    for (let c=0;c<bc.length && !broken;c++) if (!linkB[c]) broken={a:[0,ac.length], b:[c,c+1]};
+    if (broken) { envs.push(broken); continue; }
+    return {a,b,ac,bc,ab,ba,anchors,moves,movedA,movedB,groups,ag,bg,envs,linkA,linkB};
+  }
+}
+// One speculative layout of a transition: side 0 shows the earlier reading,
+// side 1 the later. Every cluster is a box holding real text; spaces are the
+// original single spaces as text, so they still collapse at line starts.
+function makeView(w,plan,index,side) {
+  const el=document.createElement('span'); el.className='diff-view'; el.hidden=true;
+  const tokens=side ? plan.b:plan.a, clusters=side ? plan.bc:plan.ac, links=side ? plan.linkB:plan.linkA;
+  const groupOf=side ? plan.bg:plan.ag, moved=side ? plan.movedB:plan.movedA;
+  const items=clusters.map((c,i)=> {
+    if (i>0) el.append(document.createTextNode(' '));
+    const box=document.createElement('span'), ink=document.createElement('span');
+    box.className='token'; ink.className='ink';
+    for (let x=c.start;x<c.end;x++) {
+      const part=document.createElement('span'); part.textContent=tokens[x].text;
+      part.dataset.change=groupOf[x]>=0 ? plan.groups[groupOf[x]].kind : moved.has(x) ? 'move':'keep';
+      ink.append(part);
+    }
+    box.append(ink); el.append(box);
+    const link=links[i], env=link.env ?? -1;
+    box.dataset.role=env>=0 ? 'stretch' : link.moved ? 'move':'keep';
+    return {box,ink,cluster:i,env,other:env>=0 ? null:link.to,moved:!!link.moved};
+  });
+  w.el.append(el);
+  return {el,items,side,depth:index+side};
+}
+// Markup is the only authoring surface. All phrase-specific state and wiring
+// live here, discovered from data-stretch, never from hardcoded ID lists.
+function mount(el) {
+  const id = el.dataset.stretch;
+  const readings = [...el.children].filter(child=>child.hasAttribute('data-reading'));
+  if (!id || ids.has(id) || el.querySelector('[data-stretch]') || readings.length<2 || readings.some(r=>!r.textContent.trim())) {
+    throw Error('Each stretch needs a unique ID, no nesting, and at least two nonempty readings.');
+  }
+  ids.add(id);
+  const spec = {id, label:el.dataset.label || id, readings:readings.map(r=>({label:r.dataset.reading, text:r.textContent.trim().replace(/\s+/g,' ')}))};
+  const plans=spec.readings.slice(1).map((r,i)=>analyze(spec.readings[i].text,r.text));
+  const w = {el, readings, spec, plans, last:readings.length-1, progress:0, preview:0, touched:false};
+  w.frames=plans.map((plan,index)=>({plan,index,views:[makeView(w,plan,index,0),makeView(w,plan,index,1)]}));
+  w.grip=document.createElement('span'); w.grip.className='grip'; w.grip.setAttribute('aria-hidden','true');
+  w.bars=readings.map(()=>{ const bar=document.createElement('i'); w.grip.append(bar); return bar; });
+  el.append(w.grip);
+  for (const [key,value] of Object.entries({role:'slider', tabindex:'0', 'aria-label':spec.label, 'aria-orientation':'vertical', 'aria-valuemin':'0', 'aria-valuemax':w.last, 'aria-describedby':'hint'})) el.setAttribute(key,value);
+  w.row=makeRow(w);
+  el.addEventListener('focus',()=>activate(w));
+  el.addEventListener('pointerdown',e=> {
+    if (drag || (e.pointerType==='mouse' && e.button!==0)) return;
+    stopAnimation(w); activate(w); el.setPointerCapture(e.pointerId);
+    drag={w, id:e.pointerId, y:e.clientY, start:w.progress, furthest:0};
+    log('grab', {on:id, depth:w.preview});
+    el.classList.add('held'); document.body.classList.add('dragging'); e.preventDefault();
+  });
+  el.addEventListener('pointermove',e=> {
+    if (!drag || drag.w!==w || drag.id!==e.pointerId) return;
+    const delta=e.clientY-drag.y;
+    drag.furthest=Math.max(drag.furthest, Math.abs(delta));
+    preview(w, drag.start+delta/PX_PER_READING, 'drag');
+  });
+  el.addEventListener('pointerup',()=>{ if (drag?.w===w) finish(); });
+  el.addEventListener('pointercancel',()=>{ if (drag?.w===w) finish(true); });
+  el.addEventListener('lostpointercapture',()=>{ if (drag?.w===w) finish(true); });
+  el.addEventListener('keydown',e=> {
+    if (drag) return;
+    const step={ArrowDown:1,ArrowRight:1,ArrowUp:-1,ArrowLeft:-1}[e.key];
+    if (step && e.shiftKey) { stopAnimation(w); preview(w,w.progress+step*.1,'keyboard'); }
+    else if (step || e.key==='Home' || e.key==='End') {
+      // Pressing against an end is not exploration, so it does not touch.
+      const to=step ? Math.round(w.progress)+step : e.key==='Home' ? 0:w.last;
+      if (to>=0 && to<=w.last && to!==w.progress) go(w,to,'keyboard');
+    }
+    else return;
+    e.preventDefault();
+  });
+  return w;
+}
+function makeRow(w) {
+  const row=document.createElement('li'); row.className='row';
+  const name=document.createElement('button'); name.className='row-name'; name.textContent=w.spec.label;
+  name.onclick=()=>w.el.focus();
+  const stops=document.createElement('div'); stops.className='stops'; stops.style.setProperty('--n',w.last+1);
+  const buttons=w.spec.readings.map((r,i)=> {
+    const b=document.createElement('button'); b.className='stop'; b.textContent=r.label; b.title=r.text;
+    b.onclick=()=>{ activate(w); go(w,i,'stop'); };
+    stops.append(b); return b;
+  });
+  const thumb=document.createElement('span'); thumb.className='thumb'; stops.append(thumb);
+  const status=document.createElement('span'); status.className='status';
+  const notes=document.createElement('p'); notes.className='row-notes';
+  row.append(name,stops,status,notes); $('ledger').append(row);
+  return {row,buttons,thumb,status,notes};
+}
+const widgets=[...document.querySelectorAll('[data-stretch]')].map(mount);
+if (!widgets.length) throw Error('No stretchable phrases found.');
+active=widgets[0];
+$('panel').hidden=false; $('hint').hidden=false;
+function activate(w) {
+  if (drag && drag.w!==w) return;
+  if (active!==w) { active=w; widgets.forEach(paintWidget); }
+  paintPanel();
+}
+function measure(w) {
+  // Probe inside the phrase so it inherits exactly the phrase's font.
+  const probe=document.createElement('span');
+  probe.style.cssText='position:absolute;visibility:hidden;white-space:pre';
+  probe.setAttribute('aria-hidden','true'); w.el.append(probe);
+  const width=text=>{ probe.textContent=text; return probe.getBoundingClientRect().width; };
+  w.space=width(' ');
+  w.fontSize=parseFloat(getComputedStyle(w.el).fontSize) || 16;
+  w.clusterWidths=w.spec.readings.map(r=>tokenize(r.text).clusters.map(c=>width(c.text)));
+  // An envelope's natural room on each side: its clusters plus the spaces between them.
+  const room=(widths,[lo,hi])=>widths.slice(lo,hi).reduce((s,x)=>s+x,0)+(hi-lo-1)*w.space;
+  for (const frame of w.frames) frame.totals=frame.plan.envs.map(e=>[room(w.clusterWidths[frame.index],e.a),room(w.clusterWidths[frame.index+1],e.b)]);
+  probe.remove();
+}
+// Width rule: each envelope occupies the same interpolated room on both sides,
+// filled entirely by its own reading's words, scaled together. No blank slots;
+// the pop at halfway leaves the rest of the paragraph where it was.
+function layoutView(w,frame,side,t) {
+  const view=frame.views[side]; view.el.hidden=false;
+  for (const item of view.items) {
+    let width=w.clusterWidths[view.depth][item.cluster], scale=1;
+    if (item.env>=0) {
+      const e=frame.plan.envs[item.env], [ta,tb]=frame.totals[item.env], range=side ? e.b:e.a;
+      const gaps=(range[1]-range[0]-1)*w.space, natural=(side ? tb:ta)-gaps;
+      scale=Math.max(0,(ta+(tb-ta)*t-gaps)/(natural || 1)); width*=scale;
+    }
+    item.box.style.width=width+'px';
+    item.ink.style.transform=`scaleX(${scale})`;
+  }
+  // Real DOM layout supplies geometry, including the paragraph's wrapping.
+  // Read only after all writes, once per speculative view.
+  // Envelopes are keyed by their first box, so a whole envelope can travel too.
+  const rects=new Map();
+  for (const item of view.items) {
+    const key=item.env<0 ? item.cluster : `env${item.env}`;
+    if (!rects.has(key)) rects.set(key,item.box.getBoundingClientRect());
+  }
+  view.el.hidden=true;
+  return rects;
+}
+function paintWidget(w) {
+  const index=Math.floor(w.progress), t=w.progress-index;
+  w.readings.forEach(el=>el.hidden=true);
+  w.frames.forEach(frame=>frame.views.forEach(view=>view.el.hidden=true));
+  if (t===0) w.readings[w.preview].hidden=false;
+  else {
+    const frame=w.frames[index], a=layoutView(w,frame,0,t), b=layoutView(w,frame,1,t);
+    const side=t<.5 ? 0:1, view=frame.views[side], lift=Math.sin(Math.PI*t)*w.fontSize*.85;
+    view.el.hidden=false;
+    for (const item of view.items) {
+      const key=item.env>=0 ? `env${item.env}` : null;
+      const from=a.get(key ?? (side ? item.other:item.cluster)), to=b.get(key ?? (side ? item.cluster:item.other)), base=side ? to:from;
+      const x=from.left+(to.left-from.left)*t-base.left;
+      // Moved runs arc above the line so they pass over, not through, the words they swap with.
+      const y=from.top+(to.top-from.top)*t-base.top-(item.moved ? lift:0);
+      // Envelope boxes keep their stretch and travel with their envelope's start.
+      const scale=item.env>=0 ? item.ink.style.transform : '';
+      item.ink.style.transform=`translate(${x}px,${y}px) ${scale}`.trim();
+    }
+  }
+  w.bars.forEach((bar,i)=>bar.classList.toggle('on',i<=w.preview));
+  w.el.classList.toggle('active',w===active);
+  w.el.classList.toggle('touched',w.touched);
+  w.el.setAttribute('aria-valuenow',w.preview);
+  w.el.setAttribute('aria-valuetext',`${w.spec.readings[w.preview].label}, ${w.preview+1} of ${w.last+1}: ${w.spec.readings[w.preview].text}`);
+}
+function status(w) {
+  const kept=state.accepted?.values[w.spec.id];
+  if (kept) return kept.depth===w.preview ? ['kept','Kept'] : ['changed','Changed'];
+  return w.touched ? ['explored','Explored'] : ['untouched','Untouched'];
+}
+function paintPanel() {
+  for (const w of widgets) {
+    const r=w.row, [tone,text]=status(w), kept=state.accepted?.values[w.spec.id];
+    r.row.classList.toggle('active',w===active); r.row.classList.toggle('touched',w.touched);
+    r.buttons.forEach((b,i)=>{ b.setAttribute('aria-pressed',String(i===w.preview)); b.classList.toggle('kept',kept?.depth===i); });
+    r.thumb.style.left=`${(w.progress+.5)/(w.last+1)*100}%`;
+    r.status.textContent=text; r.status.dataset.tone=tone;
+    r.notes.replaceChildren(...state.notes.filter(n=>n.on===w.spec.id).flatMap(note=> {
+      const q=document.createElement('q'); q.textContent=note.text;
+      return [document.createTextNode(`Note on ${note.state.reading}: `),q,document.createTextNode(' ')];
+    }));
+  }
+  const w=active, index=Math.floor(w.progress), t=w.progress-index, r=w.spec.readings;
+  $('position').textContent = t===0
+    ? `${w.spec.label}: ${r[w.preview].label}, reading ${w.preview+1} of ${w.last+1}.${w.preview<w.last ? ` Pull down for ${r[w.preview+1].label}.`:''}`
+    : t<.5 ? `${w.spec.label}: ${r[index].label} stretching toward ${r[index+1].label}, ${Math.round(t*100)}%. It switches at 50%.`
+    : `${w.spec.label}: now ${r[index+1].label}, settling, ${Math.round(t*100)}%.`;
+  const touched=widgets.filter(w=>w.touched);
+  const unchanged=state.accepted && JSON.stringify(state.accepted.values)===JSON.stringify(values());
+  $('accept').disabled=!touched.length || !!drag || unchanged;
+  $('accept').textContent=!touched.length ? 'Nothing explored yet' : unchanged ? 'Kept' : `Keep ${touched.length} explored phrase${touched.length>1?'s':''}`;
+  $('undo').disabled=state.accepted===null;
+  $('tally').textContent=`${touched.length} of ${widgets.length} explored`;
+  $('note-toggle').textContent=`Note on ${w.spec.label}`;
+  $('note-label').textContent=`Something the ${w.spec.label} readings cannot say?`;
+  paintDiff(w);
+  $('record').textContent=JSON.stringify(payload(),null,2);
+}
+// Human-readable report of both layers for the active transition.
+function paintDiff(w) {
+  const index=Math.min(w.last-1,Math.floor(w.progress)), plan=w.plans[index];
+  // Rejoin tokens with a space only where the reading had one.
+  const quote=(tokens,list)=>`“${list.map((i,k)=>(k && tokens[list[k-1]].cluster!==tokens[i].cluster ? ' ':'')+tokens[i].text).join('')}”`;
+  const clusters=(list,[lo,hi])=>`“${list.slice(lo,hi).map(c=>c.text).join(' ')}”`;
+  $('diff-title').textContent=`${w.spec.label}, ${w.spec.readings[index].label} to ${w.spec.readings[index+1].label}:`;
+  const lines=[];
+  for (const m of plan.moves) lines.push(['move',`${quote(plan.a,Array.from({length:m.length},(_,k)=>m.a+k))} moves`]);
+  for (const g of plan.groups) lines.push([g.kind, g.kind==='insert' ? `adds ${quote(plan.b,g.b)}` : g.kind==='delete' ? `drops ${quote(plan.a,g.a)}` : `${quote(plan.a,g.a)} becomes ${quote(plan.b,g.b)}`]);
+  for (const e of plan.envs) {
+    let borrowed=0;
+    for (let x=plan.ac[e.a[0]].start;x<plan.ac[e.a[1]-1].end;x++) if (plan.a[x].word && plan.ab[x]>=0) borrowed++;
+    lines.push(['stretch',`${clusters(plan.ac,e.a)} stretches, then pops to ${clusters(plan.bc,e.b)}${borrowed ? `, borrowing ${borrowed} matching word${borrowed>1?'s':''} as room` : ''}`]);
+  }
+  $('diff').replaceChildren(...lines.map(([kind,text])=> {
+    const li=document.createElement('li'), swatch=document.createElement('span');
+    swatch.className='swatch'; swatch.dataset.kind=kind;
+    li.append(swatch,document.createTextNode(text)); return li;
+  }));
+}
+function log(type, data={}) {
+  state.events.push({type, at:Math.round(performance.now()), ...data});
+  if (state.events.length > 1000) state.events.shift();
+}
+function values() {
+  return Object.fromEntries(widgets.filter(w=>w.touched).map(w=>[w.spec.id,{depth:w.preview, ...w.spec.readings[w.preview]}]));
+}
+const touchedMap=()=>Object.fromEntries(widgets.map(w=>[w.spec.id,w.touched]));
+function payload() {
+  return {...state, specs:widgets.map(w=>w.spec), values:values(), touched:touchedMap(), active:active.spec.id};
+}
+function touch(w) {
+  if (w.touched) return;
+  w.touched=true; document.body.classList.add('explored');
+}
+// The only state change. Logs reading switches, not every pixel of motion.
+function preview(w,n,source) {
+  n=Math.max(0,Math.min(w.last,n));
+  if (n===w.progress) return;
+  const before=w.preview;
+  w.progress=n; w.preview=Math.round(n); touch(w);
+  if (w.preview!==before) log('reading',{on:w.spec.id,depth:w.preview,source});
+  paintWidget(w); paintPanel();
+}
+const reducedMotion=()=>!!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+// Each phrase glides on its own. Stop one; with land=true jump to where it was heading (used by Keep).
+function stopAnimation(w,land=false) {
+  const anim=w.anim; if (!anim) return;
+  cancelAnimationFrame(anim.id); w.anim=null;
+  if (land) preview(w,anim.target,anim.source);
+}
+// Glide to a whole reading so buttons and keys show the same motion a drag does.
+// The intent counts at once: a click is exploration even before a frame paints.
+function go(w,target,source,ms) {
+  target=Math.max(0,Math.min(w.last,target)); stopAnimation(w);
+  if (!w.touched) { touch(w); log('choose',{on:w.spec.id,depth:target,source}); paintWidget(w); paintPanel(); }
+  if (target===w.progress) return;
+  const from=w.progress, start=performance.now(), duration=ms ?? Math.min(900,260+340*Math.abs(target-from));
+  if (typeof requestAnimationFrame!=='function' || reducedMotion()) return preview(w,target,source);
+  const frame=now=> {
+    const k=Math.min(1,(now-start)/duration), ease=k<.5 ? 2*k*k : 1-(-2*k+2)**2/2;
+    preview(w,k<1 ? from+(target-from)*ease : target,source);
+    if (k<1) w.anim.id=requestAnimationFrame(frame); else w.anim=null;
+  };
+  w.anim={target,source,id:requestAnimationFrame(frame)};
+}
+function finish(cancelled=false) {
+  if (!drag) return;
+  const d=drag; drag=null;
+  log(cancelled ? 'cancel':'release', {on:d.w.spec.id,from:d.start,to:d.w.preview,furthestPixels:Math.round(d.furthest)});
+  d.w.el.classList.remove('held'); document.body.classList.remove('dragging');
+  if (d.w.el.hasPointerCapture(d.id)) d.w.el.releasePointerCapture(d.id);
+  go(d.w,cancelled ? d.start : Math.round(d.w.progress),'release',160);
+  paintPanel();
+}
+document.addEventListener('keydown', e => {
+  if (e.key==='Escape' && drag) { finish(true); e.preventDefault(); }
+});
+$('mark').onchange=()=>document.body.classList.toggle('mark-edits',$('mark').checked);
+$('accept').onclick=()=> {
+  widgets.forEach(w=>stopAnimation(w,true));
+  previousKeep=state.accepted;
+  state.accepted={values:values(), touched:touchedMap()};
+  const kept=widgets.filter(w=>w.touched), left=widgets.filter(w=>!w.touched);
+  const summary=`Kept ${kept.map(w=>`${w.spec.label} as ${w.spec.readings[w.preview].label}`).join(', ')}.`;
+  $('result').textContent=summary+(left.length ? ` Left out, untouched: ${left.map(w=>w.spec.label).join(', ')}.` : '');
+  log('keep',{ids:Object.keys(state.accepted.values)});
+  try { window.openchamber?.submit?.(payload(),summary); } catch {}
+  paintPanel();
+};
+$('undo').onclick=()=> {
+  state.accepted=previousKeep; previousKeep=null;
+  log('undo-keep'); $('result').textContent=state.accepted ? 'Previous keep restored.' : 'Keep undone. Nothing is accepted.'; paintPanel();
+};
+function toggleNote(open) {
+  $('note-form').hidden=!open; $('note-toggle').setAttribute('aria-expanded',String(open));
+  if (open) $('note').focus();
+}
+$('note-toggle').onclick=()=>toggleNote($('note-form').hidden);
+$('note-cancel').onclick=()=>toggleNote(false);
+$('note-form').onsubmit=e=> {
+  e.preventDefault();
+  const text=$('note').value.trim(); if (!text) return;
+  const w=active;
+  state.notes.push({on:w.spec.id,text,state:{depth:w.preview,reading:w.spec.readings[w.preview].label,touched:w.touched}});
+  log('note',{on:w.spec.id}); $('note').value=''; toggleNote(false);
+  $('result').textContent=`Note pinned to ${w.spec.label}. Notes are kept separately from readings.`; paintPanel();
+};
+$('download').onclick=()=> {
+  const blob=new Blob([JSON.stringify(payload(),null,2)],{type:'application/json'});
+  const url=URL.createObjectURL(blob), a=document.createElement('a');
+  a.href=url; a.download='stretchtext-exploration.json'; a.click();
+  setTimeout(()=>URL.revokeObjectURL(url),1000);
+};
+function remeasure() { widgets.forEach(measure); widgets.forEach(paintWidget); paintPanel(); }
+window.addEventListener('resize',remeasure);
+if (document.fonts) document.fonts.ready.then(remeasure);
+// Inspection deep link, e.g. #context=1.4: poses a phrase mid-transition.
+// It does not count as exploration, so nothing it shows can be kept.
+for (const [id,n] of new URLSearchParams(location.hash.slice(1))) {
+  const w=widgets.find(w=>w.spec.id===id);
+  if (w && Number.isFinite(+n)) { w.progress=Math.max(0,Math.min(w.last,+n)); w.preview=Math.round(w.progress); }
+}
+widgets.forEach(measure); log('open'); widgets.forEach(paintWidget); paintPanel();
+</script>
+</body>
+</html>
